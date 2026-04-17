@@ -15,8 +15,8 @@ function normCompanyUrl(s) {
 function normProfileUrl(s) {
   const t = s.trim().replace(/\/+$/, "");
   const m = t.match(/linkedin\.com\/in\/([^/?#]+)/);
-  if (m) return `https://www.linkedin.com/in/${m[1]}/`;
-  if (!t.includes("/")) return `https://www.linkedin.com/in/${t}/`;
+  if (m) return `https://www.linkedin.com/in/${m[1]}`;
+  if (!t.includes("/")) return `https://www.linkedin.com/in/${t}`;
   return t;
 }
 
@@ -76,9 +76,12 @@ function slimEmployees(raw) {
   return { companyName, count: profiles.length, profiles };
 }
 
-function slimPerformer(raw) {
+function slimPerformer(raw, requestedUrl) {
   const p = Array.isArray(raw) ? raw[0] : raw;
-  if (!p) throw new Error("No profile data returned for the top performer.");
+  if (!p || Object.keys(p).length === 0) {
+    const debug = JSON.stringify(raw).slice(0, 300);
+    throw new Error(`Profile not found for "${requestedUrl}". (Apify returned: ${debug}) Check if the URL is correct or if the profile is strictly private.`);
+  }
   return {
     name: p.fullName || `${p.firstName || ""} ${p.lastName || ""}`.trim(),
     headline: p.headline || "",
@@ -304,17 +307,26 @@ export default function App() {
         }).catch(e => { updateStatus("employees", "error"); throw new Error(`Company scrape: ${e.message}`); });
       }
 
+      const perfNormUrl = normProfileUrl(performerUrl);
       const perfPromise = scrapeActor("dev_fusion~linkedin-profile-scraper", {
-        profileUrls: [normProfileUrl(performerUrl)],
-      }).then(data => { updateStatus("performer", "done"); return data; })
-        .catch(e => { updateStatus("performer", "error"); throw new Error(`Profile scrape: ${e.message}`); });
+        profileUrls: [perfNormUrl],
+      }).then(async data => {
+        // Fallback: If dev_fusion fails to find the profile (returns empty),
+        // try harvestapi's dedicated profile scraper instead.
+        if (!data || !Array.isArray(data) || data.length === 0) {
+          return scrapeActor("harvestapi~linkedin-profile-scraper", { url: perfNormUrl });
+        }
+        return data;
+      })
+      .then(data => { updateStatus("performer", "done"); return data; })
+      .catch(e => { updateStatus("performer", "error"); throw new Error(`Profile scrape: ${e.message}`); });
 
       const [empRaw, perfRaw] = await Promise.all([empPromise, perfPromise]);
 
       // ── process ──
       updateStatus("analysis", "active");
       const emp = slimEmployees(empRaw);
-      const perf = slimPerformer(perfRaw);
+      const perf = slimPerformer(perfRaw, perfNormUrl);
       const prompt = buildPrompt({
         companyName: emp.companyName,
         count: emp.count,
