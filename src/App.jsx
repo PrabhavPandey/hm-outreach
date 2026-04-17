@@ -21,39 +21,22 @@ function normProfileUrl(s) {
 }
 
 // ── apify ────────────────────────────────────────────────────────────────────
-async function apifyRun(actorId, input) {
-  const r = await fetch(
-    `https://api.apify.com/v2/acts/${actorId}/runs?token=${APIFY}`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input) }
-  );
-  const d = await r.json();
-  if (!r.ok) throw new Error(d?.error?.message || `Apify error ${r.status}`);
-  return d.data.id;
-}
-
-async function apifyPoll(runId) {
-  for (let i = 0; i < 120; i++) {
-    await new Promise(r => setTimeout(r, 3000));
-    const r = await fetch(`https://api.apify.com/v2/actor-runs/${runId}?token=${APIFY}`);
-    const d = await r.json();
-    const s = d.data?.status;
-    if (s === "SUCCEEDED") return d.data.defaultDatasetId;
-    if (["FAILED", "ABORTED", "TIMED-OUT"].includes(s))
-      throw new Error(`Scrape ${s.toLowerCase()}. Check Apify console for details.`);
-  }
-  throw new Error("Scrape timed out after 6 minutes.");
-}
-
-async function apifyGet(dsId) {
-  const r = await fetch(`https://api.apify.com/v2/datasets/${dsId}/items?token=${APIFY}`);
-  if (!r.ok) throw new Error(`Dataset fetch failed: ${r.status}`);
-  return r.json();
-}
-
 async function scrapeActor(actorId, input) {
-  const runId = await apifyRun(actorId, input);
-  const dsId = await apifyPoll(runId);
-  return apifyGet(dsId);
+  // Use Apify's synchronous dataset streaming API. 
+  // It waits for the run and returns the dataset directly in one go.
+  const r = await fetch(
+    `https://api.apify.com/v2/acts/${actorId}/run-sync-get-dataset-items?token=${APIFY}&timeout=120`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(input)
+    }
+  );
+  if (!r.ok) {
+    const errText = await r.text();
+    throw new Error(`Apify sync scrape failed (${r.status}): ${errText}`);
+  }
+  return r.json();
 }
 
 // ── data processing ──────────────────────────────────────────────────────────
